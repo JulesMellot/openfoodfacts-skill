@@ -1,0 +1,105 @@
+<!--
+OpenFoodFacts Skill for Google AI Edge Gallery
+Looks up food products by barcode or by name search.
+Uses the OpenFoodFacts public API (no key required).
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OpenFoodFacts Skill</title>
+</head>
+<body>
+    <script>
+        window['ai_edge_gallery_get_result'] = async function(data, secret) {
+            try {
+                const params = JSON.parse(data);
+                const { barcode, query } = params;
+
+                if (!barcode && !query) {
+                    throw new Error("Provide either a 'barcode' or a 'query' field.");
+                }
+
+                let product = null;
+
+                // ── 1. Barcode lookup ──────────────────────────────────────────
+                if (barcode) {
+                    const url = `https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(barcode.trim())}?fields=product_name,brands,quantity,nutriscore_grade,nova_group,ecoscore_grade,ingredients_text,nutriments,labels,image_front_url,categories`;
+                    const res = await fetch(url, {
+                        headers: { 'User-Agent': 'AIEdgeGallerySkill/1.0' }
+                    });
+                    if (!res.ok) throw new Error(`HTTP error ${res.status}`);
+                    const json = await res.json();
+                    if (json.status !== 1 || !json.product) {
+                        throw new Error(`Product with barcode "${barcode}" not found in OpenFoodFacts.`);
+                    }
+                    product = json.product;
+                }
+
+                // ── 2. Name search ─────────────────────────────────────────────
+                if (query && !product) {
+                    const url = `https://world.openfoodfacts.org/cgi/search.pl?search_terms=${encodeURIComponent(query.trim())}&search_simple=1&action=process&json=1&page_size=1&fields=product_name,brands,quantity,nutriscore_grade,nova_group,ecoscore_grade,ingredients_text,nutriments,labels,image_front_url,categories`;
+                    const res = await fetch(url, {
+                        headers: { 'User-Agent': 'AIEdgeGallerySkill/1.0' }
+                    });
+                    if (!res.ok) throw new Error(`HTTP error ${res.status}`);
+                    const json = await res.json();
+                    if (!json.products || json.products.length === 0) {
+                        throw new Error(`No product found for "${query}" in OpenFoodFacts.`);
+                    }
+                    product = json.products[0];
+                }
+
+                // ── 3. Extract & normalise fields ──────────────────────────────
+                const n = product.nutriments || {};
+
+                const nutrition = {
+                    energy_kcal:     round(n['energy-kcal_100g']     ?? n['energy-kcal'] ?? null),
+                    fat:             round(n['fat_100g']              ?? n['fat']         ?? null),
+                    saturated_fat:   round(n['saturated-fat_100g']    ?? null),
+                    carbohydrates:   round(n['carbohydrates_100g']    ?? null),
+                    sugars:          round(n['sugars_100g']           ?? null),
+                    fiber:           round(n['fiber_100g']            ?? null),
+                    proteins:        round(n['proteins_100g']         ?? null),
+                    salt:            round(n['salt_100g']             ?? null),
+                };
+
+                const result = {
+                    product: {
+                        name:     product.product_name  || null,
+                        brand:    product.brands        || null,
+                        quantity: product.quantity      || null,
+                        categories: product.categories  || null,
+                    },
+                    nutriscore: (product.nutriscore_grade || '').toUpperCase() || null,
+                    nova:       product.nova_group ? Number(product.nova_group) : null,
+                    ecoscore:   (product.ecoscore_grade  || '').toUpperCase() || null,
+                    ingredients: product.ingredients_text || null,
+                    nutrition,
+                    labels:     product.labels || null,
+                    image_url:  product.image_front_url || null,
+                };
+
+                return JSON.stringify({
+                    result: JSON.stringify(result),
+                    image: null,
+                    error: null
+                });
+
+            } catch (err) {
+                return JSON.stringify({
+                    result: null,
+                    image: null,
+                    error: err.message
+                });
+            }
+
+            function round(val) {
+                if (val === null || val === undefined) return null;
+                return Math.round(val * 100) / 100;
+            }
+        };
+    </script>
+</body>
+</html>
